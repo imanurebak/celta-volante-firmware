@@ -1,0 +1,76 @@
+# Compila el programa del volante (ESP32) y lo publica para que Celta Hub
+# lo detecte y lo instale por Bluetooth.
+#
+# Corre cuando cambia celta_volante/ o CAMBIOS.md en main (o a mano desde
+# Actions). La version sale de FIRMWARE_VERSION en celta_volante.ino: cada
+# version queda en su release "vX.Y.Z" con celta-volante.bin y firmware.json,
+# y se marca como la ultima (Celta Hub lee
+# releases/latest/download/firmware.json).
+name: Compilar y publicar
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "celta_volante/**"
+      - "CAMBIOS.md"
+      - ".github/workflows/build.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: arduino/setup-arduino-cli@v2
+
+      - name: Instalar las placas ESP32
+        run: |
+          arduino-cli config init
+          arduino-cli config add board_manager.additional_urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32
+          arduino-cli core list
+
+      # Mismo esquema de memoria que hay que elegir al cargarlo por cable
+      # (Minimal SPIFFS: 1,9 MB por programa, con lugar para actualizar).
+      - name: Compilar
+        run: |
+          arduino-cli compile --fqbn esp32:esp32:esp32:PartitionScheme=min_spiffs \
+            --output-dir build celta_volante
+
+      - name: Armar firmware.json
+        id: manifest
+        run: |
+          VERSION=$(grep -oP '#define FIRMWARE_VERSION "\K[^"]+' celta_volante/celta_volante.ino)
+          if [ -z "$VERSION" ]; then echo "No se encontró FIRMWARE_VERSION"; exit 1; fi
+          cp build/celta_volante.ino.bin celta-volante.bin
+          SIZE=$(stat -c%s celta-volante.bin)
+          SHA=$(sha256sum celta-volante.bin | cut -d' ' -f1)
+          # Notas: la seccion "## VERSION" de CAMBIOS.md.
+          NOTES=$(awk -v v="## $VERSION" '$0==v{f=1;next} /^## /{f=0} f' CAMBIOS.md | sed '/^\s*$/d')
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/celta-volante.bin"
+          jq -n --arg version "$VERSION" --argjson size "$SIZE" --arg sha256 "$SHA" \
+            --arg url "$URL" --arg notes "$NOTES" --arg built "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{version: $version, size: $size, sha256: $sha256, url: $url, notes: $notes, built: $built}' > firmware.json
+          cat firmware.json
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Publicar
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.manifest.outputs.version }}
+        run: |
+          TAG="v${VERSION}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # Misma version recompilada: se reemplazan los archivos.
+            gh release upload "$TAG" celta-volante.bin firmware.json --clobber
+            gh release edit "$TAG" --latest
+          else
+            gh release create "$TAG" celta-volante.bin firmware.json \
+              --title "Celta Volante $VERSION" --notes-file <(jq -r .notes firmware.json) --latest
+          fi
