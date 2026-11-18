@@ -3,6 +3,11 @@
 Cada versión: la sección `## X.Y.Z` (sin otro texto en esa línea). Celta
 Hub muestra estas notas al ofrecer la actualización.
 
+## 1.3.1
+
+- Versión de prueba de la actualización por Bluetooth (solo agrega un
+  mensaje en el Monitor serie al arrancar).
+
 ## 1.3.0
 
 - Actualización por Bluetooth desde Celta Hub (sin cable).

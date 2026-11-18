@@ -54,7 +54,7 @@
 #define OTA_CONTROL_UUID "c3a1e8b3-4f2d-4c6a-9b1e-7d5f0a1c2e30"  // actualizacion: ordenes y respuestas
 #define OTA_DATA_UUID    "c3a1e8b4-4f2d-4c6a-9b1e-7d5f0a1c2e30"  // actualizacion: el programa en pedazos
 
-#define FIRMWARE_VERSION "1.3.0"
+#define FIRMWARE_VERSION "1.3.1"
 
 const int BUTTON_PINS[] = {25, 26, 27, 14};
 const int BUTTON_COUNT = sizeof(BUTTON_PINS) / sizeof(BUTTON_PINS[0]);
@@ -267,6 +267,7 @@ void setup() {
   BLEDevice::startAdvertising();
 
   Serial.println("Celta Volante v" FIRMWARE_VERSION " listo. Esperando a Celta Hub...");
+  Serial.println("(Version de prueba: si ves esto, la actualizacion por Bluetooth funciono)");
 }
 
 void loop() {
