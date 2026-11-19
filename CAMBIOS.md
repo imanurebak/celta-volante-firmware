@@ -3,6 +3,11 @@
 Cada versión: la sección `## X.Y.Z` (sin otro texto en esa línea). Celta
 Hub muestra estas notas al ofrecer la actualización.
 
+## 1.4.0
+
+- Nombre nuevo en Bluetooth: «Auto Hub Volante» (antes «Celta Volante»).
+  Sigue conectándose solo, no hace falta volver a vincularlo.
+
 ## 1.3.1
 
 - Versión de prueba de la actualización por Bluetooth (solo agrega un

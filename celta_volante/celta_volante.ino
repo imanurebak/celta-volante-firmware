@@ -1,5 +1,5 @@
 /*
- * Celta Volante - ESP32 (WROOM-32)
+ * Auto Hub Volante - ESP32 (WROOM-32)  (antes "Celta Volante")
  *
  * VERSION: ver FIRMWARE_VERSION abajo. Subirla en cada cambio y anotarla en
  * el historial de esp32/README.md. Se ve en el Monitor serie al arrancar y
@@ -54,7 +54,7 @@
 #define OTA_CONTROL_UUID "c3a1e8b3-4f2d-4c6a-9b1e-7d5f0a1c2e30"  // actualizacion: ordenes y respuestas
 #define OTA_DATA_UUID    "c3a1e8b4-4f2d-4c6a-9b1e-7d5f0a1c2e30"  // actualizacion: el programa en pedazos
 
-#define FIRMWARE_VERSION "1.3.1"
+#define FIRMWARE_VERSION "1.4.0"
 
 const int BUTTON_PINS[] = {25, 26, 27, 14};
 const int BUTTON_COUNT = sizeof(BUTTON_PINS) / sizeof(BUTTON_PINS[0]);
@@ -157,7 +157,7 @@ class OtaControlCallbacks : public BLECharacteristicCallbacks {
         restartAt = millis() + 1500;  // reiniciar con el programa nuevo
       }
     } else if (command == "ABORT") {
-      otaAbort("pedido de Celta Hub");
+      otaAbort("pedido de Auto Hub");
       otaReply("ABORTED");
     } else {
       otaReply("ERR orden desconocida");
@@ -199,12 +199,12 @@ bool holdSent[BUTTON_COUNT];
 class ServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer* server) override {
     connected = true;
-    Serial.println("Celta Hub conectado (Celta Volante v" FIRMWARE_VERSION ")");
+    Serial.println("Auto Hub conectado (Auto Hub Volante v" FIRMWARE_VERSION ")");
   }
   void onDisconnect(BLEServer* server) override {
     connected = false;
     if (otaActive) otaAbort("se corto la conexion");
-    Serial.println("Celta Hub desconectado, esperando de nuevo...");
+    Serial.println("Auto Hub desconectado, esperando de nuevo...");
     delay(200);
     BLEDevice::startAdvertising();  // vuelve a quedar visible
   }
@@ -236,7 +236,7 @@ void setup() {
     holdSent[i] = false;
   }
 
-  BLEDevice::init("Celta Volante");
+  BLEDevice::init("Auto Hub Volante");  // nombre Bluetooth (desde 1.4.0; antes "Celta Volante")
   BLEDevice::setMTU(517);  // pedazos grandes: la actualizacion tarda menos
   BLEServer* server = BLEDevice::createServer();
   server->setCallbacks(new ServerCallbacks());
@@ -266,8 +266,7 @@ void setup() {
   advertising->setScanResponse(true);
   BLEDevice::startAdvertising();
 
-  Serial.println("Celta Volante v" FIRMWARE_VERSION " listo. Esperando a Celta Hub...");
-  Serial.println("(Version de prueba: si ves esto, la actualizacion por Bluetooth funciono)");
+  Serial.println("Auto Hub Volante v" FIRMWARE_VERSION " listo. Esperando a Auto Hub...");
 }
 
 void loop() {
