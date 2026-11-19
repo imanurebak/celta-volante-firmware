@@ -33,7 +33,8 @@ jobs:
           arduino-cli config init
           arduino-cli config add board_manager.additional_urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
           arduino-cli core update-index
-          arduino-cli core install esp32:esp32
+          # Version fija: la 4.0.0 saco la libreria BLE (BLEDevice.h) que usa el volante.
+          arduino-cli core install esp32:esp32@3.3.13
           arduino-cli core list
 
       # Mismo esquema de memoria que hay que elegir al cargarlo por cable
@@ -72,5 +73,5 @@ jobs:
             gh release edit "$TAG" --latest
           else
             gh release create "$TAG" celta-volante.bin firmware.json \
-              --title "Celta Volante $VERSION" --notes-file <(jq -r .notes firmware.json) --latest
+              --title "Auto Hub Volante $VERSION" --notes-file <(jq -r .notes firmware.json) --latest
           fi
