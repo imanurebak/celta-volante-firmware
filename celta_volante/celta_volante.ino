@@ -5,19 +5,34 @@
  * el historial de esp32/README.md. Se ve en el Monitor serie al arrancar y
  * en el celular (Celta Hub > ⚙ > Volante ESP32).
  *
- * Lee botones DIGITALES (por ahora 4, simulados con un cable puente a GND)
- * y los manda por Bluetooth (BLE) a Celta Hub, que ejecuta la accion
- * configurada en el celular (⚙ > Botones del volante).
+ * Lee los comandos del volante Chevrolet (Onix / Tracker) y los manda por
+ * Bluetooth (BLE) a Auto Hub, que ejecuta la accion configurada en el
+ * celular (Volante > perfiles).
  *
- * Conexion (etapa 1, sin componentes):
- *   Boton 1 (RES+ arriba) = GPIO 25   Boton 2 (SET- abajo) = GPIO 26
- *   Boton 3 (Crucero)     = GPIO 27   Boton 4 (Cancelar)   = GPIO 14
- *   "Apretar" = unir ese pin con GND (cable puente o pulsador).
- *   Las resistencias internas (INPUT_PULLUP) mantienen el pin en alto si no se aprieta.
+ * COMANDOS DEL VOLANTE (desde 1.5.0): cada lado es una "escalera de
+ * resistencias": un solo cable de senal y cada tecla da otra resistencia.
+ *   Izquierdo (conector blanco): GRIS -> GPIO 34, NEGRO -> GND,
+ *     4,7 kOhm entre GPIO 34 y 3,3 V, 100 nF entre GPIO 34 y GND.
+ *     Reposo 8,78k | RES+ 5,38k (1) | SET- 3,64k (2) | Crucero 2,59k (3) | Cancelar 1,40k (4)
+ *   Derecho (conector negro): VIOLETA -> GPIO 35, NEGRO -> GND,
+ *     2,2 kOhm entre GPIO 35 y 3,3 V, 100 nF entre GPIO 35 y GND.
+ *     Reposo abierto | Vol+ 0,31k (5) | Vol- 0,63k (6) | SRC arriba 1,01k (7)
+ *     | SRC abajo 1,50k (8) | SRC apretado 2,31k (9) | Telefono 3,82k (10) | Silencio 8,88k (11)
+ *   Luz de las teclas: VERDE (+) y MARRON (-), no pasa por el ESP32.
+ *   Una lectura cuenta solo si queda a +-12 % del valor de la tecla y estable
+ *   30 ms: los valores intermedios (tecla apretada a medias) se ignoran.
+ *
+ * Botones DIGITALES (etapa 1, siguen andando): 1 = GPIO 25, 2 = GPIO 26,
+ *   3 = GPIO 27, 4 = GPIO 14; "apretar" = unir el pin con GND.
  *
  * Toque o mantener: si se suelta antes de 0,6 s se manda "toque" al soltar;
  * si se mantiene 0,6 s se manda "mantener" en ese momento (sin esperar a
- * soltar). Cada uno hace su propia accion en Celta Hub.
+ * soltar). Cada uno hace su propia accion en Auto Hub. Volumen + y - siguen
+ * mandando "repetir" cada 0,2 s mientras se mantienen.
+ *
+ * Mensaje (caracteristica de botones): [numero, tipo]. Tipo 1 = toque,
+ * 2 = mantener, 3 = repetir (mantenido), 4 = aviso del comando (numero 1 =
+ * izquierdo desconectado, 2 = izquierdo conectado de nuevo).
  *
  * LED azul de la placa (GPIO 2): parpadea lento = esperando a Celta Hub,
  * fijo = conectado, apagado un instante = boton enviado, parpadeo rapido =
@@ -54,7 +69,7 @@
 #define OTA_CONTROL_UUID "c3a1e8b3-4f2d-4c6a-9b1e-7d5f0a1c2e30"  // actualizacion: ordenes y respuestas
 #define OTA_DATA_UUID    "c3a1e8b4-4f2d-4c6a-9b1e-7d5f0a1c2e30"  // actualizacion: el programa en pedazos
 
-#define FIRMWARE_VERSION "1.4.0"
+#define FIRMWARE_VERSION "1.5.0"
 
 const int BUTTON_PINS[] = {25, 26, 27, 14};
 const int BUTTON_COUNT = sizeof(BUTTON_PINS) / sizeof(BUTTON_PINS[0]);
@@ -65,6 +80,50 @@ const unsigned long LONG_PRESS_MS = 600;  // mantener apretado este tiempo = "ma
 // Tipo de pulsacion que se manda (segundo byte del mensaje).
 const uint8_t PRESS_TAP = 1;
 const uint8_t PRESS_HOLD = 2;
+const uint8_t PRESS_REPEAT = 3;
+const uint8_t PAD_STATUS = 4;
+
+// ---- Comandos del volante (escaleras de resistencias) ----
+
+struct LadderKey {
+  float ohms;      // resistencia medida de la tecla
+  uint8_t number;  // boton que se manda a Auto Hub
+};
+
+struct Ladder {
+  const char* name;
+  int pin;
+  float pullUp;          // resistencia entre el pin y 3,3 V
+  float restOhms;        // reposo (0 = abierto)
+  const LadderKey* keys;
+  int keyCount;
+  // Estado (rebote, toque / mantener / repetir).
+  uint8_t candidate;
+  unsigned long candidateSince;
+  uint8_t stable;
+  unsigned long pressedAt;
+  bool holdSent;
+  unsigned long lastRepeat;
+  bool open;
+  unsigned long openSince;
+  bool reportedOpen;
+};
+
+const LadderKey LEFT_KEYS[] = {{5380, 1}, {3641, 2}, {2594, 3}, {1397, 4}};
+const LadderKey RIGHT_KEYS[] = {{310, 5}, {631, 6}, {1006, 7}, {1503, 8}, {2310, 9}, {3820, 10}, {8880, 11}};
+
+Ladder ladders[] = {
+  {"izquierdo", 34, 4700, 8780, LEFT_KEYS, 4},
+  {"derecho", 35, 2200, 0, RIGHT_KEYS, 7},
+};
+const int LADDER_COUNT = sizeof(ladders) / sizeof(ladders[0]);
+
+const float KEY_TOLERANCE = 0.12;            // +-12 % del valor de la tecla
+const unsigned long LADDER_STABLE_MS = 30;   // lectura estable antes de aceptarla
+const unsigned long REPEAT_MS = 200;         // volumen mantenido: cada 0,2 s
+const unsigned long OPEN_REPORT_MS = 2000;   // comando izquierdo sin senal tanto tiempo = desconectado
+
+bool repeats(uint8_t number) { return number == 5 || number == 6; }
 
 BLECharacteristic* buttonCharacteristic = nullptr;
 volatile bool connected = false;
@@ -211,22 +270,105 @@ class ServerCallbacks : public BLEServerCallbacks {
 };
 
 void sendButton(int number, uint8_t kind) {
-  // Mensaje: [numero de boton (1..4), 1 = toque / 2 = mantener]
+  // Mensaje: [numero de boton (1..11), 1 = toque / 2 = mantener / 3 = repetir]
   uint8_t message[2] = {(uint8_t)number, kind};
   buttonCharacteristic->setValue(message, 2);
   if (connected) {
     buttonCharacteristic->notify();
   }
-  Serial.printf("Boton %d %s %s\n", number, kind == PRESS_HOLD ? "MANTENER" : "toque",
+  Serial.printf("Boton %d %s %s\n", number,
+                kind == PRESS_HOLD ? "MANTENER" : kind == PRESS_REPEAT ? "repetir" : "toque",
                 connected ? "enviado" : "(sin conexion)");
+  if (kind == PRESS_REPEAT) return;  // sin parpadeo (no frena la repeticion)
   digitalWrite(LED_PIN, LOW);
   delay(80);
   digitalWrite(LED_PIN, connected ? HIGH : LOW);
 }
 
+void sendPadStatus(uint8_t number) {
+  uint8_t message[2] = {number, PAD_STATUS};
+  buttonCharacteristic->setValue(message, 2);
+  if (connected) buttonCharacteristic->notify();
+}
+
+/** Resistencia que ve el pin (ohms), o -1 si esta abierto (sin nada conectado). */
+float readOhms(const Ladder& l) {
+  uint32_t mv = 0;
+  for (int i = 0; i < 4; i++) mv += analogReadMilliVolts(l.pin);
+  mv /= 4;
+  if (mv >= 3150) return -1;  // casi 3,3 V: abierto
+  return l.pullUp * mv / (3300.0 - mv);
+}
+
+/** Tecla que corresponde a esa resistencia: numero, 0 = ninguna, 255 = valor intermedio (se ignora). */
+uint8_t matchKey(const Ladder& l, float ohms) {
+  if (ohms < 0) return 0;
+  for (int i = 0; i < l.keyCount; i++) {
+    float k = l.keys[i].ohms;
+    if (ohms > k * (1 - KEY_TOLERANCE) && ohms < k * (1 + KEY_TOLERANCE)) return l.keys[i].number;
+  }
+  if (l.restOhms > 0 && ohms > l.restOhms * (1 - KEY_TOLERANCE) && ohms < l.restOhms * (1 + KEY_TOLERANCE)) return 0;
+  return 255;
+}
+
+void pollLadder(Ladder& l, unsigned long now) {
+  float ohms = readOhms(l);
+  // Comando izquierdo: en reposo marca 8,78k; abierto = cable suelto.
+  if (l.restOhms > 0) {
+    bool isOpen = ohms < 0;
+    if (isOpen && !l.open) l.openSince = now;
+    l.open = isOpen;
+    if (isOpen && !l.reportedOpen && now - l.openSince > OPEN_REPORT_MS) {
+      l.reportedOpen = true;
+      Serial.printf("Comando %s desconectado (revisar el cable de senal)\n", l.name);
+      sendPadStatus(1);
+    } else if (!isOpen && l.reportedOpen) {
+      l.reportedOpen = false;
+      Serial.printf("Comando %s conectado de nuevo\n", l.name);
+      sendPadStatus(2);
+    }
+  }
+  uint8_t key = matchKey(l, ohms);
+  if (key == 255) return;  // valor intermedio: no cambia nada
+  if (key != l.candidate) {
+    l.candidate = key;
+    l.candidateSince = now;
+  }
+  if (now - l.candidateSince >= LADDER_STABLE_MS && l.candidate != l.stable) {
+    // Se solto (o se paso directo a otra tecla): toque si no llego a mantener.
+    if (l.stable != 0 && !l.holdSent) sendButton(l.stable, PRESS_TAP);
+    l.stable = l.candidate;
+    if (l.stable != 0) {
+      l.pressedAt = now;
+      l.holdSent = false;
+    }
+  }
+  if (l.stable != 0 && !l.holdSent && now - l.pressedAt >= LONG_PRESS_MS) {
+    l.holdSent = true;
+    l.lastRepeat = now;
+    sendButton(l.stable, PRESS_HOLD);
+  } else if (l.stable != 0 && l.holdSent && repeats(l.stable) && now - l.lastRepeat >= REPEAT_MS) {
+    l.lastRepeat = now;
+    sendButton(l.stable, PRESS_REPEAT);
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   pinMode(LED_PIN, OUTPUT);
+  for (int i = 0; i < LADDER_COUNT; i++) {
+    pinMode(ladders[i].pin, INPUT);
+    analogSetPinAttenuation(ladders[i].pin, ADC_11db);  // hasta ~3,1 V
+    ladders[i].candidate = 0;
+    ladders[i].candidateSince = 0;
+    ladders[i].stable = 0;
+    ladders[i].pressedAt = 0;
+    ladders[i].holdSent = false;
+    ladders[i].lastRepeat = 0;
+    ladders[i].open = false;
+    ladders[i].openSince = 0;
+    ladders[i].reportedOpen = false;
+  }
   for (int i = 0; i < BUTTON_COUNT; i++) {
     pinMode(BUTTON_PINS[i], INPUT_PULLUP);
     stablePressed[i] = false;
@@ -298,6 +440,11 @@ void loop() {
       holdSent[i] = true;
       sendButton(i + 1, PRESS_HOLD);
     }
+  }
+
+  // Comandos del volante (no durante una actualizacion: el Bluetooth va primero).
+  if (!otaActive) {
+    for (int i = 0; i < LADDER_COUNT; i++) pollLadder(ladders[i], now);
   }
 
   // LED: parpadeo rapido actualizando, fijo si hay conexion, parpadeo lento si no.

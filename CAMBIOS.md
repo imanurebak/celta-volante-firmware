@@ -3,6 +3,16 @@
 Cada versión: la sección `## X.Y.Z` (sin otro texto en esa línea). Celta
 Hub muestra estas notas al ofrecer la actualización.
 
+## 1.5.0
+
+- Lee los comandos del volante Chevrolet: izquierdo (crucero, RES+, SET−,
+  cancelar) en GPIO 34 y derecho (volumen + y −, SRC arriba, abajo y
+  apretado, teléfono y silencio) en GPIO 35. 11 teclas en total.
+- Volumen + y − repiten mientras se mantienen apretados.
+- Las teclas apretadas a medias se ignoran (no disparan otra tecla).
+- Avisa si se desconecta el comando izquierdo.
+- Los 4 botones de prueba (GPIO 25, 26, 27 y 14) siguen funcionando.
+
 ## 1.4.0
 
 - Nombre nuevo en Bluetooth: «Auto Hub Volante» (antes «Celta Volante»).
