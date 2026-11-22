@@ -69,7 +69,7 @@
 #define OTA_CONTROL_UUID "c3a1e8b3-4f2d-4c6a-9b1e-7d5f0a1c2e30"  // actualizacion: ordenes y respuestas
 #define OTA_DATA_UUID    "c3a1e8b4-4f2d-4c6a-9b1e-7d5f0a1c2e30"  // actualizacion: el programa en pedazos
 
-#define FIRMWARE_VERSION "1.5.0"
+#define FIRMWARE_VERSION "1.5.1"
 
 const int BUTTON_PINS[] = {25, 26, 27, 14};
 const int BUTTON_COUNT = sizeof(BUTTON_PINS) / sizeof(BUTTON_PINS[0]);
@@ -119,6 +119,10 @@ Ladder ladders[] = {
 const int LADDER_COUNT = sizeof(ladders) / sizeof(ladders[0]);
 
 const float KEY_TOLERANCE = 0.12;            // +-12 % del valor de la tecla
+const uint32_t OPEN_MV = 2950;               // mas que esto = nada conectado / nada apretado (el ADC no llega a 3,3 V)
+const unsigned long STUCK_MS = 300;          // valor intermedio tanto tiempo con una tecla apretada = se solto
+const unsigned long BOOT_IGNORE_MS = 800;    // al arrancar se ignoran las lecturas (cargan los capacitores)
+bool diagnostics = true;                     // muestra en el Monitor serie lo que lee cada comando
 const unsigned long LADDER_STABLE_MS = 30;   // lectura estable antes de aceptarla
 const unsigned long REPEAT_MS = 200;         // volumen mantenido: cada 0,2 s
 const unsigned long OPEN_REPORT_MS = 2000;   // comando izquierdo sin senal tanto tiempo = desconectado
@@ -291,18 +295,45 @@ void sendPadStatus(uint8_t number) {
   if (connected) buttonCharacteristic->notify();
 }
 
+uint32_t lastMv[2] = {0, 0};
+unsigned long midSince[2] = {0, 0};  // desde cuando se lee un valor intermedio
+
 /** Resistencia que ve el pin (ohms), o -1 si esta abierto (sin nada conectado). */
-float readOhms(const Ladder& l) {
+float readOhms(const Ladder& l, uint32_t& mvOut) {
   uint32_t mv = 0;
-  for (int i = 0; i < 4; i++) mv += analogReadMilliVolts(l.pin);
-  mv /= 4;
-  if (mv >= 3150) return -1;  // casi 3,3 V: abierto
+  for (int i = 0; i < 8; i++) mv += analogReadMilliVolts(l.pin);
+  mv /= 8;
+  mvOut = mv;
+  if (mv >= OPEN_MV) return -1;  // cerca de 3,3 V: abierto (el ADC del ESP32 llega a ~3,1 V)
   return l.pullUp * mv / (3300.0 - mv);
+}
+
+/** Diagnostico: lo que lee el comando, cuando cambia (para ajustar los valores de las teclas). */
+void logReading(const Ladder& l, int index, uint32_t mv, float ohms, uint8_t key) {
+  if (!diagnostics) return;
+  uint32_t prev = lastMv[index];
+  if ((mv > prev ? mv - prev : prev - mv) < 60) return;  // cambio chico: no se muestra
+  lastMv[index] = mv;
+  if (ohms < 0) {
+    Serial.printf("  [%s] %u mV = abierto (nada apretado)\n", l.name, (unsigned)mv);
+  } else if (key == 255) {
+    Serial.printf("  [%s] %u mV = %.2f kOhm -> valor intermedio (se ignora)\n", l.name, (unsigned)mv, ohms / 1000.0);
+  } else if (key == 0) {
+    Serial.printf("  [%s] %u mV = %.2f kOhm -> reposo\n", l.name, (unsigned)mv, ohms / 1000.0);
+  } else {
+    Serial.printf("  [%s] %u mV = %.2f kOhm -> boton %d\n", l.name, (unsigned)mv, ohms / 1000.0, key);
+  }
 }
 
 /** Tecla que corresponde a esa resistencia: numero, 0 = ninguna, 255 = valor intermedio (se ignora). */
 uint8_t matchKey(const Ladder& l, float ohms) {
   if (ohms < 0) return 0;
+  // Comando sin resistencia de reposo (derecho): muy por encima de la tecla mas alta = nada apretado.
+  if (l.restOhms == 0) {
+    float highest = 0;
+    for (int i = 0; i < l.keyCount; i++) highest = max(highest, l.keys[i].ohms);
+    if (ohms > highest * 1.5) return 0;
+  }
   for (int i = 0; i < l.keyCount; i++) {
     float k = l.keys[i].ohms;
     if (ohms > k * (1 - KEY_TOLERANCE) && ohms < k * (1 + KEY_TOLERANCE)) return l.keys[i].number;
@@ -311,8 +342,10 @@ uint8_t matchKey(const Ladder& l, float ohms) {
   return 255;
 }
 
-void pollLadder(Ladder& l, unsigned long now) {
-  float ohms = readOhms(l);
+void pollLadder(Ladder& l, int index, unsigned long now) {
+  uint32_t mv = 0;
+  float ohms = readOhms(l, mv);
+  if (now < BOOT_IGNORE_MS) return;
   // Comando izquierdo: en reposo marca 8,78k; abierto = cable suelto.
   if (l.restOhms > 0) {
     bool isOpen = ohms < 0;
@@ -329,7 +362,15 @@ void pollLadder(Ladder& l, unsigned long now) {
     }
   }
   uint8_t key = matchKey(l, ohms);
-  if (key == 255) return;  // valor intermedio: no cambia nada
+  logReading(l, index, mv, ohms, key);
+  if (key == 255) {
+    // Valor intermedio: no cambia nada, salvo que dure (la tecla ya se solto).
+    if (midSince[index] == 0) midSince[index] = now;
+    if (l.stable != 0 && now - midSince[index] > STUCK_MS) key = 0;
+    else return;
+  } else {
+    midSince[index] = 0;
+  }
   if (key != l.candidate) {
     l.candidate = key;
     l.candidateSince = now;
@@ -444,7 +485,7 @@ void loop() {
 
   // Comandos del volante (no durante una actualizacion: el Bluetooth va primero).
   if (!otaActive) {
-    for (int i = 0; i < LADDER_COUNT; i++) pollLadder(ladders[i], now);
+    for (int i = 0; i < LADDER_COUNT; i++) pollLadder(ladders[i], i, now);
   }
 
   // LED: parpadeo rapido actualizando, fijo si hay conexion, parpadeo lento si no.

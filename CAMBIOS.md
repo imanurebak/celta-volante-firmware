@@ -3,6 +3,15 @@
 Cada versión: la sección `## X.Y.Z` (sin otro texto en esa línea). Celta
 Hub muestra estas notas al ofrecer la actualización.
 
+## 1.5.1
+
+- Corrige que todas las teclas del comando derecho salían como «mantener»:
+  el ESP32 no detectaba que se soltaban (su entrada analógica no llega a
+  3,3 V).
+- Ignora las lecturas del primer instante al encender.
+- Diagnóstico en el Monitor serie: muestra lo que lee cada comando (mV,
+  kΩ y qué tecla es), para ajustar los valores.
+
 ## 1.5.0
 
 - Lee los comandos del volante Chevrolet: izquierdo (crucero, RES+, SET−,
